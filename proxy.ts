@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import dotenv from "dotenv";
-import { createProxyMiddleware } from "./proxy/middleware";
-import { runTestRunner } from "./proxy/runner";
+import { createProxyMiddleware } from "./proxy/middleware.js";
+import { runTestRunner } from "./proxy/runner.js";
 
 console.log('Starting proxy server...');
 

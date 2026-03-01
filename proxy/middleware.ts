@@ -5,12 +5,14 @@ import {
   getDirectoryPath,
   getFilename,
   getBackendName,
-  saveFile,
-  parseFile,
+  saveHurlRequest,
+  appendHurlResponse,
+  parseHurl,
   generateDiff,
   getQueryHash,
-} from "./utils";
-import { processHandlers, validateResponse } from "./handlers";
+  parseCookies,
+} from "./utils.js";
+import { processHandlers, validateResponse } from "./handlers.js";
 
 const requestCounters: Record<string, number> = {};
 let sessionStartTime = Date.now();
@@ -52,71 +54,66 @@ export function createProxyMiddleware(options: ProxyOptions) {
       };
 
       const primaryDir = getDirectoryPath(baseDir, metadata);
-      const resFilename = getFilename(metadata, "res");
-      const reqFilename = getFilename(metadata, "req");
-
-      const primaryResPath = path.join(primaryDir, resFilename);
-      const fallbackResFilename = getFilename(
-        { ...metadata, sequenceIndex: 0 },
-        "res"
-      ).replace(".0.res", ".res");
-      const primaryFallbackPath = path.join(primaryDir, fallbackResFilename);
+      const hurlFilename = getFilename(metadata, "hurl");
+      const primaryHurlPath = path.join(primaryDir, hurlFilename);
 
       // 1. Process custom TS handlers first
-      // processHandlers logs requestSchema failures and handles the response if an Express handler is exported
       const handlerResult = await processHandlers(req, res, metadata, baseDir);
       if (handlerResult.handled) {
-        // Express handler took over
         return;
       }
 
-      const hasExactRecording = fs.existsSync(primaryResPath);
+      const hasExactRecording = fs.existsSync(primaryHurlPath);
 
       if (
         options.mode === "replay" ||
         (options.mode === "continue" && hasExactRecording)
       ) {
-        let pathToPlay = primaryResPath;
         if (!hasExactRecording) {
-          if (options.mode === "replay" && fs.existsSync(primaryFallbackPath)) {
-            pathToPlay = primaryFallbackPath;
-          } else {
-            res
-              .status(502)
-              .json({
-                error: "Sequence exhausted, no fallback found",
+            // Fallback logic could be added here if needed, but for now we follow the exact sequence
+            res.status(502).json({
+                error: "Sequence exhausted, no recording found",
                 cacheKey,
                 sequenceIndex,
-              });
+            });
             return;
-          }
         }
 
-        const content = fs.readFileSync(pathToPlay, "utf8");
-        const parsed = parseFile(content);
+        const content = fs.readFileSync(primaryHurlPath, "utf8");
+        const interaction = parseHurl(content, primaryHurlPath);
 
-        Object.entries(parsed.headers).forEach(([k, v]) => {
-          if (k.toLowerCase() !== "transfer-encoding") {
-            res.setHeader(k, v);
-          }
-        });
-
-        res.status(parsed.frontmatter.status || 200).send(parsed.body);
-        return;
+        if (interaction.response) {
+            Object.entries(interaction.response.headers).forEach(([k, v]) => {
+                if (k.toLowerCase() !== "transfer-encoding") {
+                    res.setHeader(k, v);
+                }
+            });
+            res.status(interaction.response.status).send(interaction.response.body);
+            return;
+        }
       }
 
       const timeSinceStartMs = Date.now() - sessionStartTime;
       const reqHeaders = { ...req.headers };
       delete reqHeaders["host"];
 
-      const bodyStr = req.body ? req.body.toString("utf8") : "";
+      const cookieHeader = req.headers.cookie;
+      const cookies = cookieHeader ? parseCookies(cookieHeader as string) : {};
 
-      saveFile(
-        path.join(primaryDir, reqFilename),
-        { timeSinceStartMs, fullUrl, method },
-        reqHeaders as any,
-        bodyStr
-      );
+      // Start recording the request immediately
+      const interaction = {
+        metadata: { timeSinceStartMs, fullUrl, method, sequenceIndex },
+        request: {
+          method,
+          url: `${req.protocol}://${req.get("host")}${urlPath}`,
+          headers: reqHeaders as Record<string, string>,
+          query: query as Record<string, any>,
+          cookies,
+          body: req.body,
+        },
+      };
+
+      saveHurlRequest(primaryHurlPath, interaction);
 
       const fetchPromises = [
         options.primaryBackend,
@@ -141,7 +138,7 @@ export function createProxyMiddleware(options: ProxyOptions) {
 
           const timeTakenMs = Date.now() - start;
           const arrayBuffer = await proxyRes.arrayBuffer();
-          const proxyResBody = Buffer.from(arrayBuffer).toString("utf8");
+          const proxyResBody = Buffer.from(arrayBuffer);
 
           const resHeaders: Record<string, string> = {};
           proxyRes.headers.forEach((v, k) => {
@@ -159,9 +156,9 @@ export function createProxyMiddleware(options: ProxyOptions) {
         } catch (err: any) {
           return {
             url: backendUrl,
-            status: 500,
-            headers: {},
-            body: err.message,
+            status: 502, // Bad Gateway as it failed to connect to backend
+            headers: { "content-type": "application/json" },
+            body: Buffer.from(JSON.stringify({ error: "Backend failure", details: err.message })),
             timeTakenMs: Date.now() - start,
             error: err,
           };
@@ -173,22 +170,17 @@ export function createProxyMiddleware(options: ProxyOptions) {
 
       primaryPromise
         .then((primaryResult) => {
-          saveFile(
-            path.join(primaryDir, resFilename),
-            {
-              status: primaryResult.status,
-              timeSinceStartMs,
-              timeTakenMs: primaryResult.timeTakenMs,
-            },
-            primaryResult.headers,
-            primaryResult.body
-          );
+          appendHurlResponse(primaryHurlPath, {
+            status: primaryResult.status,
+            headers: primaryResult.headers,
+            body: primaryResult.body,
+          });
 
           // Validate response schema for primary backend
           validateResponse(
             handlerResult.responseSchema,
             primaryResult.headers,
-            primaryResult.body,
+            primaryResult.body.toString("utf8"),
             primaryResult.status
           );
 
@@ -206,43 +198,33 @@ export function createProxyMiddleware(options: ProxyOptions) {
                 ...metadata,
                 backendName: secBackendName,
               });
-              const secReqPath = path.join(secDir, reqFilename);
-              const secResPath = path.join(secDir, resFilename);
-              const secDiffPath = path.join(
-                secDir,
-                getFilename(metadata, "diff")
-              );
+              const secHurlPath = path.join(secDir, hurlFilename);
 
-              saveFile(
-                secReqPath,
-                { timeSinceStartMs, fullUrl, method },
-                reqHeaders as any,
-                bodyStr
-              );
+              saveHurlRequest(secHurlPath, {
+                ...interaction,
+                metadata: { ...interaction.metadata, backend: secBackendName }
+              });
 
-              saveFile(
-                secResPath,
-                {
-                  status: secResult.status,
-                  timeSinceStartMs,
-                  timeTakenMs: secResult.timeTakenMs,
-                  error: secResult.error ? true : undefined,
-                },
-                secResult.headers,
-                secResult.body
-              );
+              appendHurlResponse(secHurlPath, {
+                status: secResult.status,
+                headers: secResult.headers,
+                body: secResult.body,
+              });
 
-              let primaryBodyJson = primaryResult.body;
-              let secBodyJson = secResult.body;
+              let primaryBodyStr = primaryResult.body.toString("utf8");
+              let secBodyStr = secResult.body.toString("utf8");
+              let primaryBodyJson = primaryBodyStr;
+              let secBodyJson = secBodyStr;
               try {
-                primaryBodyJson = JSON.parse(primaryResult.body);
+                primaryBodyJson = JSON.parse(primaryBodyStr);
               } catch (e) {}
               try {
-                secBodyJson = JSON.parse(secResult.body);
+                secBodyJson = JSON.parse(secBodyStr);
               } catch (e) {}
 
               const diffOutput = generateDiff(primaryBodyJson, secBodyJson);
               if (diffOutput && diffOutput.trim() !== "") {
+                const secDiffPath = path.join(secDir, getFilename(metadata, "diff"));
                 fs.writeFileSync(secDiffPath, diffOutput, "utf8");
               }
             });

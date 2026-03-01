@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { getBackendName, parseFile, generateDiff } from "./utils";
-import { validateResponse, processHandlers } from "./handlers";
+import { getBackendName, parseHurl, generateDiff } from "./utils.js";
+import { validateResponse } from "./handlers.js";
 
 function getAllFiles(dirPath: string, arrayOfFiles: string[] = []) {
   if (!fs.existsSync(dirPath)) return arrayOfFiles;
@@ -41,19 +41,16 @@ export async function runTestRunner(options: {
   }
 
   const allFiles = getAllFiles(primaryDir);
-  const reqFiles = allFiles.filter((f) => f.endsWith(".req"));
+  const hurlFiles = allFiles.filter((f) => f.endsWith(".hurl"));
 
-  const requestsToRun = reqFiles
+  const requestsToRun = hurlFiles
     .map((filePath) => {
       const content = fs.readFileSync(filePath, "utf8");
-      const parsed = parseFile(content);
+      const interaction = parseHurl(content, filePath);
       return {
         filePath,
-        timeSinceStartMs: parsed.frontmatter.timeSinceStartMs || 0,
-        fullUrl: parsed.frontmatter.fullUrl || "",
-        method: parsed.frontmatter.method || "GET",
-        headers: parsed.headers,
-        body: parsed.body,
+        interaction,
+        timeSinceStartMs: parseInt(interaction.metadata.timeSinceStartMs, 10) || 0,
         filename: path.basename(filePath),
       };
     })
@@ -74,25 +71,41 @@ export async function runTestRunner(options: {
     }
     lastRequestTime = reqData.timeSinceStartMs;
 
-    // We can extract URL from fullUrl
-    if (!reqData.fullUrl) {
-      console.log(
-        `❌ FAIL [NO-URL] ${reqData.filename} - Skipping because no fullUrl saved in frontmatter`
-      );
-      failed++;
-      continue;
+    const { interaction } = reqData;
+    
+    // Reconstruct URL
+    let testUrl: URL;
+    try {
+        // Use the path from request.url which was saved without query
+        const tempUrl = new URL(interaction.request.url); 
+        testUrl = new URL(tempUrl.pathname, options.testingBackend);
+        
+        // Add query params from [Query] section
+        Object.entries(interaction.request.query).forEach(([k, v]) => {
+            testUrl.searchParams.append(k, String(v));
+        });
+    } catch (e) {
+        console.log(`❌ FAIL [INVALID-URL] ${reqData.filename} - ${e}`);
+        failed++;
+        continue;
     }
 
-    const testUrl = new URL(reqData.fullUrl, options.testingBackend);
+    const headers = { ...interaction.request.headers };
+    // Add cookies from [Cookies] section
+    if (Object.keys(interaction.request.cookies).length > 0) {
+        headers["cookie"] = Object.entries(interaction.request.cookies)
+            .map(([k, v]) => `${k}=${v}`)
+            .join("; ");
+    }
 
     try {
       const res = await fetch(testUrl.toString(), {
-        method: reqData.method,
-        headers: reqData.headers,
-        body: ["GET", "HEAD"].includes(reqData.method)
+        method: interaction.request.method,
+        headers: headers as Record<string, string>,
+        body: ["GET", "HEAD"].includes(interaction.request.method)
           ? undefined
-          : reqData.body && reqData.body.length
-            ? reqData.body
+          : interaction.request.body && interaction.request.body.length
+            ? interaction.request.body
             : undefined,
       });
 
@@ -104,15 +117,15 @@ export async function runTestRunner(options: {
         resHeaders[k] = v;
       });
 
-      // Load primary backend response
-      const resFilePath = reqData.filePath.replace(".req", ".res");
+      // Load primary backend response from the same interaction
+      const primaryResponse = interaction.response;
       let primaryResBodyStr = "";
       let primaryStatus = 200;
-      if (fs.existsSync(resFilePath)) {
-        const primaryResContent = fs.readFileSync(resFilePath, "utf8");
-        const primaryParsed = parseFile(primaryResContent);
-        primaryResBodyStr = primaryParsed.body;
-        primaryStatus = primaryParsed.frontmatter.status || 200;
+      if (primaryResponse) {
+        primaryResBodyStr = Buffer.isBuffer(primaryResponse.body) 
+            ? primaryResponse.body.toString("utf8") 
+            : primaryResponse.body;
+        primaryStatus = primaryResponse.status;
       }
 
       // Semantic JSON Diff
@@ -140,11 +153,9 @@ export async function runTestRunner(options: {
         errMsg += `Response body diff found. `;
       }
 
-      // Check Zod schema using the mock req/res mock Express objects? Or directly loading handlers?
-      // For simplicity, we just check handlers if available.
-      // But we need the exact dir path for this recording to resolve the handler.
+      // Check Zod schema
       const dirPath = path.dirname(reqData.filePath);
-      const leaf = reqData.filename.replace(".req", ""); // e.g. "users.get.abc.1"
+      const leaf = reqData.filename.replace(".hurl", ""); 
       const handlerPathMatch = path.join(dirPath, `${leaf}.ts`);
       let responseSchema: any;
 
@@ -169,7 +180,7 @@ export async function runTestRunner(options: {
       }
 
       if (hasError) {
-        console.log(`❌ FAIL ${reqData.method} ${reqData.fullUrl} - ${errMsg}`);
+        console.log(`❌ FAIL ${interaction.request.method} ${testUrl.pathname}${testUrl.search} - ${errMsg}`);
         failed++;
 
         // Save diff file in testing dir
@@ -182,18 +193,18 @@ export async function runTestRunner(options: {
         const relPath = path.relative(primaryDir, reqData.filePath);
         const targetDiffPath = path.join(
           testingBaseDir,
-          relPath.replace(".req", ".diff")
+          relPath.replace(".hurl", ".diff")
         );
 
         fs.mkdirSync(path.dirname(targetDiffPath), { recursive: true });
         fs.writeFileSync(targetDiffPath, diffOutput || errMsg, "utf8");
       } else {
-        console.log(`✅ PASS ${reqData.method} ${reqData.fullUrl}`);
+        console.log(`✅ PASS ${interaction.request.method} ${testUrl.pathname}${testUrl.search}`);
         passed++;
       }
     } catch (err: any) {
       console.log(
-        `❌ FAIL ${reqData.method} ${reqData.fullUrl} - Fetch error: ${err.message}`
+        `❌ FAIL ${interaction.request.method} ${testUrl.pathname}${testUrl.search} - Fetch error: ${err.message}`
       );
       failed++;
     }
