@@ -374,6 +374,28 @@ export function appendHurlResponse(
   fs.appendFileSync(filePath, content, "utf8");
 }
 
+export function getAllFiles(dirPath: string, filter?: (filePath: string) => boolean, arrayOfFiles: string[] = []) {
+  if (!fs.existsSync(dirPath)) return arrayOfFiles;
+  
+  try {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        getAllFiles(fullPath, filter, arrayOfFiles);
+      } else {
+        if (!filter || filter(fullPath)) {
+          arrayOfFiles.push(fullPath);
+        }
+      }
+    }
+  } catch (error) {
+    console.error(`Error reading directory ${dirPath}:`, error);
+  }
+  
+  return arrayOfFiles;
+}
+
 export function generateDiff(obj1: unknown, obj2: unknown, color: boolean = false): string {
   // Use json-diff to generate semantic difference
   let diffStr = diffString(obj1, obj2, { color });

@@ -19,22 +19,20 @@ const rawBodyMiddleware = (req: Request, res: Response, next: NextFunction) => {
   });
 };
 
-  async function main() {
+async function main() {
   const args = process.argv.slice(2);
-  let mode: "record" | "replay" | "continue" | "verify" | "diff" | null = null;
-  let recordingId: string | null = null;
+  let mode: string | undefined;
+  let recordingId: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--mode" && args[i + 1]) {
-        const val = args[i + 1];
-        if (val === "record" || val === "replay" || val === "continue" || val === "verify" || val === "diff") {
-            mode = val;
-        }
-    }
-    if (args[i] === "--id" && args[i + 1]) recordingId = args[i + 1];
+    if (args[i] === "--mode")
+		mode = args[++i];
+    if (args[i] === "--id")
+		recordingId = args[++i];
   }
 
-  if (!mode || !["record", "replay", "continue", "verify", "diff"].includes(mode)) {
+  const validModes = ["record", "replay", "continue", "verify", "diff"];
+  if (!mode || !validModes.includes(mode)) {
     console.error(
       "Usage: ts-node proxy.ts --mode <record|replay|continue|verify|diff> --id <recording_id>"
     );
@@ -43,6 +41,12 @@ const rawBodyMiddleware = (req: Request, res: Response, next: NextFunction) => {
 
   if (!recordingId) {
     console.error("Error: --id <recording_id> is required.");
+    process.exit(1);
+  }
+
+  // Sanitize recordingId to prevent path traversal
+  if (recordingId.includes("..") || recordingId.includes("/") || recordingId.includes("\\")) {
+    console.error("Error: Invalid recording ID. Path traversal characters not allowed.");
     process.exit(1);
   }
 
@@ -60,14 +64,8 @@ const rawBodyMiddleware = (req: Request, res: Response, next: NextFunction) => {
     await runTestRunner({ recordingId, primaryBackend, testingBackend });
     process.exit(0);
   } else if (mode === "diff") {
-    if (!primaryBackend || !testingBackend) {
-        console.error(
-          "Error: PRIMARY_BACKEND and TESTING_BACKEND env vars are required for diff mode."
-        );
-        process.exit(1);
-      }
-      await runDiffTool({ recordingId, primaryBackend, testingBackend });
-      process.exit(0);
+    await runDiffTool({ recordingId });
+    process.exit(0);
   } else {
     if (!primaryBackend) {
       console.error("Error: PRIMARY_BACKEND env var is required.");

@@ -1,23 +1,7 @@
 import fs from "fs";
 import path from "path";
-import { getBackendName, parseHurl, generateDiff, stringifyHurlResponse } from "./utils.js";
+import { getBackendName, parseHurl, generateDiff, stringifyHurlResponse, getAllFiles } from "./utils.js";
 import { validateResponse } from "./handlers.js";
-
-function getAllFiles(dirPath: string, arrayOfFiles: string[] = []) {
-  if (!fs.existsSync(dirPath)) return arrayOfFiles;
-
-  const files = fs.readdirSync(dirPath);
-
-  files.forEach(function (file) {
-    if (fs.statSync(dirPath + "/" + file).isDirectory()) {
-      arrayOfFiles = getAllFiles(dirPath + "/" + file, arrayOfFiles);
-    } else {
-      arrayOfFiles.push(path.join(dirPath, "/", file));
-    }
-  });
-
-  return arrayOfFiles;
-}
 
 const sleep = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
@@ -40,8 +24,7 @@ export async function runTestRunner(options: {
     process.exit(1);
   }
 
-  const allFiles = getAllFiles(primaryDir);
-  const hurlFiles = allFiles.filter((f) => f.endsWith(".hurl"));
+  const hurlFiles = getAllFiles(primaryDir, (f) => f.endsWith(".hurl"));
 
   const requestsToRun = hurlFiles
     .map((filePath) => {
