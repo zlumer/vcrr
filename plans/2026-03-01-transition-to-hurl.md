@@ -8,14 +8,14 @@ We will replace `stringifyFile` with a new `stringifyHurl` function that formats
 *   **Metadata**: Internal proxy state (like `timeSinceStartMs`, `timeTakenMs`, and `sequenceIndex`) will be prefixed as `# key: value` comments so they are ignored by the `hurl` CLI but parsable by our tool.
 *   **Request Line**: Output the absolute URL *without* query parameters (e.g., `POST http://localhost:9099/api/users`).
 *   **Request Headers**: Print all headers natively. We will intentionally omit the `Cookie` header from this list to prevent duplication.
-*   **`[Query]` Section**: Iterate over `req.query` and output each parameter as a native Hurl key-value pair.
-*   **`[Cookies]` Section**: If a `Cookie` header exists, parse it into individual cookies and output them as native Hurl key-value pairs.
-*   **Request Body**: Output the raw body directly (no backticks if json).
+*   **`[Query]` Section**: Iterate over `req.query` and output each parameter as a native Hurl key-value pair, with values wrapped in double quotes.
+*   **`[Cookies]` Section**: If a `Cookie` header exists, parse it into individual cookies and output them as native Hurl key-value pairs, with values wrapped in double quotes.
+*   **Request Body**: Output the body wrapped in Hurl's multiline string syntax (e.g. ` ```json ` or ` ``` `) to prevent parser ambiguity.
 *   **Response Line**: Output `HTTP {status}`.
-*   **Response Headers & Body**: Print response headers natively, followed by an empty line, and then the raw response body (no backticks if json).
+*   **Response Headers & Body**: Print response headers natively, followed by an empty line, and then the response body wrapped in Hurl's multiline string syntax.
 
 **Example Output:**
-```hurl
+<hurl>
 # timeSinceStartMs: 1500
 # sequenceIndex: 1
 POST http://localhost:9099/api/users
@@ -29,20 +29,24 @@ id: 123
 [Cookies]
 session: abc123_token
 
+```json
 {
   "name": "Alice"
 }
+```
 
 HTTP 200
 # timeTakenMs: 45
 Content-Type: application/json
 Content-Length: 42
 
+```json
 {
   "id": 123,
   "name": "John Doe"
 }
 ```
+</hurl>
 
 ### 3. Custom Hurl Parser (`parseHurl` in `proxy/utils.ts`)
 We will replace `parseFile` with an internal `parseHurl` function that understands our generated subset of Hurl syntax. It will read the file line-by-line to extract:
@@ -62,3 +66,15 @@ We will replace `parseFile` with an internal `parseHurl` function that understan
 *   **File Discovery**: Look for `.hurl` files instead of `.req` files.
 *   **Request Execution**: Use `parseHurl` to load the request payload (method, base URL, headers, and body). The runner will manually reconstruct the query string from the `[Query]` section and append the `Cookie` header from the `[Cookies]` section before firing the request at the testing backend.
 *   **Diffing**: Compare the testing backend's response against the recorded primary response payload extracted from the same `.hurl` file.
+
+## Hurl Documentation
+
+- https://hurl.dev/docs/hurl-file.html
+- https://hurl.dev/docs/entry.html
+- https://hurl.dev/docs/request.html
+- https://hurl.dev/docs/response.html
+- https://hurl.dev/docs/capturing-response.html
+- https://hurl.dev/docs/asserting-response.html
+- https://hurl.dev/docs/filters.html
+- https://hurl.dev/docs/templates.html
+- https://hurl.dev/docs/grammar.html
