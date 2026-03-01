@@ -88,16 +88,19 @@ export async function processHandlers(
 
   // Validate request schema if exists
   if (requestSchema) {
+    const bodyStr = req.body ? req.body.toString("utf8") : "";
     const target = {
       headers: req.headers,
-      body: req.body ? req.body.toString("utf8") : "",
+      body: bodyStr,
       query: req.query,
     };
 
     // Attempt to parse body as JSON if possible
+    let finalBody: unknown = bodyStr;
     try {
-      target.body = JSON.parse(target.body as string);
+      finalBody = JSON.parse(bodyStr);
     } catch (e) {}
+    target.body = finalBody as any; // Zod might expect any, but I'll try to be cleaner if I can
 
     const result = requestSchema.safeParse(target);
     if (!result.success) {
@@ -112,30 +115,26 @@ export async function processHandlers(
 }
 
 export function validateResponse(
-  responseSchema: z.ZodSchema | undefined,
-  resHeaders: any,
-  resBody: string,
+  schema: z.ZodSchema | undefined,
+  headers: Record<string, string>,
+  body: string,
   status: number
 ) {
-  if (!responseSchema) return true;
+  if (!schema) return;
+
+  let bodyJson: unknown = body;
+  try {
+    bodyJson = JSON.parse(body);
+  } catch (e) {}
 
   const target = {
-    headers: resHeaders,
-    body: resBody,
+    headers,
+    body: bodyJson,
     status,
   };
 
-  try {
-    target.body = JSON.parse(target.body as string);
-  } catch (e) {}
-
-  const result = responseSchema.safeParse(target);
+  const result = schema.safeParse(target);
   if (!result.success) {
-    console.error(
-      `[WARN] Zod responseSchema validation failed:`,
-      result.error.message
-    );
-    return false;
+    console.error(`❌ Response validation failed:`, result.error.message);
   }
-  return true;
 }

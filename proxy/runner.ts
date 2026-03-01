@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { getBackendName, parseHurl, generateDiff } from "./utils.js";
+import { getBackendName, parseHurl, generateDiff, stringifyHurlResponse } from "./utils.js";
 import { validateResponse } from "./handlers.js";
 
 function getAllFiles(dirPath: string, arrayOfFiles: string[] = []) {
@@ -98,15 +98,28 @@ export async function runTestRunner(options: {
             .join("; ");
     }
 
+    let fetchBody: string | ReadableStream | undefined = undefined;
+    if (!["GET", "HEAD"].includes(interaction.request.method)) {
+      if (interaction.request.body && interaction.request.body.length > 0) {
+        if (typeof interaction.request.body === "string") {
+            fetchBody = interaction.request.body;
+        } else {
+            const body = interaction.request.body;
+            fetchBody = new ReadableStream({
+                start(controller) {
+                    controller.enqueue(body);
+                    controller.close();
+                }
+            });
+        }
+      }
+    }
+
     try {
       const res = await fetch(testUrl.toString(), {
         method: interaction.request.method,
         headers: headers as Record<string, string>,
-        body: ["GET", "HEAD"].includes(interaction.request.method)
-          ? undefined
-          : interaction.request.body && interaction.request.body.length
-            ? interaction.request.body
-            : undefined,
+        body: fetchBody,
       });
 
       const arrayBuffer = await res.arrayBuffer();
@@ -129,8 +142,8 @@ export async function runTestRunner(options: {
       }
 
       // Semantic JSON Diff
-      let primaryBodyJson: any = primaryResBodyStr;
-      let secBodyJson: any = resBodyStr;
+      let primaryBodyJson: unknown = primaryResBodyStr;
+      let secBodyJson: unknown = resBodyStr;
       try {
         primaryBodyJson = JSON.parse(primaryResBodyStr);
       } catch (e) {}
@@ -195,9 +208,23 @@ export async function runTestRunner(options: {
           testingBaseDir,
           relPath.replace(".hurl", ".diff")
         );
+        const targetActualPath = path.join(
+          testingBaseDir,
+          relPath.replace(".hurl", ".actual.hurl")
+        );
 
         fs.mkdirSync(path.dirname(targetDiffPath), { recursive: true });
+        
+        // Save plain diff
         fs.writeFileSync(targetDiffPath, diffOutput || errMsg, "utf8");
+
+        // Save actual response as hurl for future re-diffing
+        const actualResponseContent = stringifyHurlResponse({
+          status: res.status,
+          headers: resHeaders,
+          body: resBodyStr,
+        });
+        fs.writeFileSync(targetActualPath, actualResponseContent, "utf8");
       } else {
         console.log(`✅ PASS ${interaction.request.method} ${testUrl.pathname}${testUrl.search}`);
         passed++;

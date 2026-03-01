@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from "express";
 import dotenv from "dotenv";
 import { createProxyMiddleware } from "./proxy/middleware.js";
 import { runTestRunner } from "./proxy/runner.js";
+import { runDiffTool } from "./proxy/diff.js";
 
 console.log('Starting proxy server...');
 
@@ -18,19 +19,24 @@ const rawBodyMiddleware = (req: Request, res: Response, next: NextFunction) => {
   });
 };
 
-async function main() {
+  async function main() {
   const args = process.argv.slice(2);
-  let mode: "record" | "replay" | "continue" | "verify" | null = null;
+  let mode: "record" | "replay" | "continue" | "verify" | "diff" | null = null;
   let recordingId: string | null = null;
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--mode" && args[i + 1]) mode = args[i + 1] as any;
+    if (args[i] === "--mode" && args[i + 1]) {
+        const val = args[i + 1];
+        if (val === "record" || val === "replay" || val === "continue" || val === "verify" || val === "diff") {
+            mode = val;
+        }
+    }
     if (args[i] === "--id" && args[i + 1]) recordingId = args[i + 1];
   }
 
-  if (!mode || !["record", "replay", "continue", "verify"].includes(mode)) {
+  if (!mode || !["record", "replay", "continue", "verify", "diff"].includes(mode)) {
     console.error(
-      "Usage: ts-node proxy.ts --mode <record|replay|continue|verify> --id <recording_id>"
+      "Usage: ts-node proxy.ts --mode <record|replay|continue|verify|diff> --id <recording_id>"
     );
     process.exit(1);
   }
@@ -53,6 +59,15 @@ async function main() {
     }
     await runTestRunner({ recordingId, primaryBackend, testingBackend });
     process.exit(0);
+  } else if (mode === "diff") {
+    if (!primaryBackend || !testingBackend) {
+        console.error(
+          "Error: PRIMARY_BACKEND and TESTING_BACKEND env vars are required for diff mode."
+        );
+        process.exit(1);
+      }
+      await runDiffTool({ recordingId, primaryBackend, testingBackend });
+      process.exit(0);
   } else {
     if (!primaryBackend) {
       console.error("Error: PRIMARY_BACKEND env var is required.");
@@ -62,8 +77,11 @@ async function main() {
     // Extract SECONDARY_BACKENDS (BACKEND_1, BACKEND_2, etc.)
     const secondaryBackends: string[] = [];
     for (const key of Object.keys(process.env)) {
-      if (key.startsWith("BACKEND_") && process.env[key]) {
-        secondaryBackends.push(process.env[key] as string);
+      if (key.startsWith("BACKEND_")) {
+        const val = process.env[key];
+        if (val) {
+          secondaryBackends.push(val);
+        }
       }
     }
 

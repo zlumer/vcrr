@@ -12,7 +12,7 @@ export function getBackendName(url: string): string {
   }
 }
 
-export function getQueryHash(queryObj: Record<string, any>): string {
+export function getQueryHash(queryObj: Record<string, unknown>): string {
   if (!queryObj || Object.keys(queryObj).length === 0) {
     return "";
   }
@@ -95,12 +95,12 @@ export function getNextSequenceIndex(
 }
 
 export interface HurlInteraction {
-  metadata: Record<string, any>;
+  metadata: Record<string, string>;
   request: {
     method: string;
     url: string;
     headers: Record<string, string>;
-    query: Record<string, any>;
+    query: Record<string, unknown>;
     cookies: Record<string, string>;
     body: string | Buffer;
     bodyFile?: string;
@@ -113,7 +113,8 @@ export interface HurlInteraction {
   };
 }
 
-function isBinary(content: string | Buffer | any): boolean {
+
+function isBinary(content: string | Buffer | unknown): boolean {
   if (Buffer.isBuffer(content)) {
     // Check if it contains null bytes or other non-text indicators
     for (let i = 0; i < Math.min(content.length, 1024); i++) {
@@ -373,8 +374,8 @@ export function appendHurlResponse(
   fs.appendFileSync(filePath, content, "utf8");
 }
 
-export function generateDiff(obj1: any, obj2: any): string {
+export function generateDiff(obj1: unknown, obj2: unknown, color: boolean = false): string {
   // Use json-diff to generate semantic difference
-  let diffStr = diffString(obj1, obj2);
+  let diffStr = diffString(obj1, obj2, { color });
   return diffStr || "";
 }

@@ -98,16 +98,21 @@ export function createProxyMiddleware(options: ProxyOptions) {
       delete reqHeaders["host"];
 
       const cookieHeader = req.headers.cookie;
-      const cookies = cookieHeader ? parseCookies(cookieHeader as string) : {};
+      const cookies = typeof cookieHeader === "string" ? parseCookies(cookieHeader) : {};
 
       // Start recording the request immediately
       const interaction = {
-        metadata: { timeSinceStartMs, fullUrl, method, sequenceIndex },
+        metadata: { 
+            timeSinceStartMs: String(timeSinceStartMs), 
+            fullUrl: String(fullUrl), 
+            method: String(method), 
+            sequenceIndex: String(sequenceIndex) 
+        },
         request: {
           method,
           url: `${req.protocol}://${req.get("host")}${urlPath}`,
-          headers: reqHeaders as Record<string, string>,
-          query: query as Record<string, any>,
+          headers: reqHeaders as Record<string, string>, // This cast is still needed because fetch headers are stricter, but I'll see if I can clean up
+          query: query as Record<string, unknown>,
           cookies,
           body: req.body,
         },
@@ -153,12 +158,13 @@ export function createProxyMiddleware(options: ProxyOptions) {
             timeTakenMs,
             error: null,
           };
-        } catch (err: any) {
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err);
           return {
             url: backendUrl,
             status: 502, // Bad Gateway as it failed to connect to backend
             headers: { "content-type": "application/json" },
-            body: Buffer.from(JSON.stringify({ error: "Backend failure", details: err.message })),
+            body: Buffer.from(JSON.stringify({ error: "Backend failure", details: errMsg })),
             timeTakenMs: Date.now() - start,
             error: err,
           };
@@ -222,7 +228,7 @@ export function createProxyMiddleware(options: ProxyOptions) {
                 secBodyJson = JSON.parse(secBodyStr);
               } catch (e) {}
 
-              const diffOutput = generateDiff(primaryBodyJson, secBodyJson);
+              const diffOutput = generateDiff(primaryBodyJson, secBodyJson, false);
               if (diffOutput && diffOutput.trim() !== "") {
                 const secDiffPath = path.join(secDir, getFilename(metadata, "diff"));
                 fs.writeFileSync(secDiffPath, diffOutput, "utf8");
