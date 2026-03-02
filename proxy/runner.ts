@@ -50,7 +50,7 @@ export async function runTestRunner(options: {
   for (const reqData of requestsToRun) {
     const delay = reqData.timeSinceStartMs - lastRequestTime;
     if (delay > 0) {
-      await sleep(delay);
+      await sleep(delay / 10); // Speed up by 10x for testing
     }
     lastRequestTime = reqData.timeSinceStartMs;
 
